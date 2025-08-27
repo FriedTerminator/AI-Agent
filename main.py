@@ -59,21 +59,23 @@ def generate_content(client, messages, verbose):
                 print("Prompt tokens:", response.usage_metadata.prompt_token_count)
                 print("Response tokens:", response.usage_metadata.candidates_token_count)
 
+            if getattr(response, "function_calls", None):
+                for function_call_part in response.function_calls:
+                    tool_resp = call_function(function_call_part, verbose=verbose)
+                    messages.append(tool_resp)
+
+                    try:
+                        payload = tool_resp.parts[0].function_response.response
+                    except Exception as e:
+                        raise RuntimeError("Tool call did not return function_response") from e
+
+                    if verbose:
+                        print(f"-> {payload}")
+                continue
+
             if getattr(response, "text", None):
                 print(response.text)
                 break
-
-            for function_call_part in response.function_calls:
-                tool_resp = call_function(function_call_part, verbose=verbose)
-                messages.append(tool_resp)
-
-                try:
-                    payload = tool_resp.parts[0].function_response.response
-                except Exception as e:
-                    raise RuntimeError("Tool call did not return function_response") from e
-
-                if verbose:
-                    print(f"-> {payload}")
     except Exception as e:
         print(e)
 
