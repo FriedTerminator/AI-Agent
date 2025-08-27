@@ -1,75 +1,61 @@
-import os
 import sys
-from dotenv import load_dotenv
+import os
 from google import genai
 from google.genai import types
+from dotenv import load_dotenv
 
-# Ensure functions is a package: ai_agent/ai_agent/functions/__init__.py
-from functions.get_files_info import schema_get_files_info, build_schema_get_files_info
+from prompts import system_prompt
+from call_function import available_functions
 
-load_dotenv()
-api_key = os.environ.get("GEMINI_API_KEY")
-if not api_key:
-    raise RuntimeError("GEMINI_API_KEY not set")
 
-if len(sys.argv) == 1:
-    raise Exception("No prompt given")
+def main():
+    load_dotenv()
 
-user_prompt = sys.argv[1]
-verbose = len(sys.argv) == 3 and sys.argv[2] == "--verbose"
+    verbose = "--verbose" in sys.argv
+    args = []
+    for arg in sys.argv[1:]:
+        if not arg.startswith("--"):
+            args.append(arg)
 
-client = genai.Client(api_key=api_key)
+    if not args:
+        print("AI Code Assistant")
+        print('\nUsage: python main.py "your prompt here" [--verbose]')
+        print('Example: python main.py "How do I fix the calculator?"')
+        sys.exit(1)
 
-system_prompt = """
-You are a helpful AI coding agent.
+    api_key = os.environ.get("GEMINI_API_KEY")
+    client = genai.Client(api_key=api_key)
 
-When a user asks a question or makes a request, make a function call plan. You can perform the following operations:
+    user_prompt = " ".join(args)
 
-- List files and directories
+    if verbose:
+        print(f"User prompt: {user_prompt}\n")
 
-All paths you provide should be relative to the working directory. You do not need to specify the working directory in your function calls as it is automatically injected for security reasons.
-"""
+    messages = [
+        types.Content(role="user", parts=[types.Part(text=user_prompt)]),
+    ]
 
-# If eager schema failed at import, build it now
-if schema_get_files_info is None:
-    schema_get_files_info = build_schema_get_files_info()
+    generate_content(client, messages, verbose)
 
-available_functions = types.Tool(function_declarations=[schema_get_files_info])
 
-config = types.GenerateContentConfig(
-    tools=[available_functions],
-    system_instruction=system_prompt,
-)
+def generate_content(client, messages, verbose):
+    response = client.models.generate_content(
+        model="gemini-2.0-flash-001",
+        contents=messages,
+        config=types.GenerateContentConfig(
+            tools=[available_functions], system_instruction=system_prompt
+        ),
+    )
+    if verbose:
+        print("Prompt tokens:", response.usage_metadata.prompt_token_count)
+        print("Response tokens:", response.usage_metadata.candidates_token_count)
 
-messages = [types.Content(role="user", parts=[types.Part(text=user_prompt)])]
+    if not response.function_calls:
+        return response.text
 
-response = client.models.generate_content(
-    model="gemini-2.0-flash-001",
-    contents=messages,
-    config=config,
-)
+    for function_call_part in response.function_calls:
+        print(f"Calling function: {function_call_part.name}({function_call_part.args})")
 
-# Extract function calls, if any
-function_calls = []
-if getattr(response, "candidates", None):
-    for cand in response.candidates:
-        parts = getattr(cand.content, "parts", []) if getattr(cand, "content", None) else []
-        for part in parts:
-            fc = getattr(part, "function_call", None)
-            if fc:
-                try:
-                    args_dict = dict(fc.args)  # ensure Python dict repr with single quotes
-                except Exception:
-                    args_dict = fc.args
-                function_calls.append((fc.name, args_dict))
 
-# ALWAYS print the function call if present (tests look for this)
-if function_calls:
-    for name, args in function_calls:
-        print(f"Calling function: {name}({args})")
-else:
-    print(response.text or "")
-
-if verbose and getattr(response, "usage_metadata", None):
-    print(f"Prompt tokens: {response.usage_metadata.prompt_token_count}")
-    print(f"Response tokens: {response.usage_metadata.candidates_token_count}")
+if __name__ == "__main__":
+    main()
