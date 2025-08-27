@@ -38,31 +38,44 @@ def main():
     generate_content(client, messages, verbose)
 
 
+
 def generate_content(client, messages, verbose):
-    response = client.models.generate_content(
-        model="gemini-2.0-flash-001",
-        contents=messages,
-        config=types.GenerateContentConfig(
-            tools=[available_functions], system_instruction=system_prompt
-        ),
-    )
-    if verbose:
-        print("Prompt tokens:", response.usage_metadata.prompt_token_count)
-        print("Response tokens:", response.usage_metadata.candidates_token_count)
+    MAX_ITERATIONS = 20
+    try:
+        for _ in range(MAX_ITERATIONS):
+            response = client.models.generate_content(
+                model="gemini-2.0-flash-001",
+                contents=messages,
+                config=types.GenerateContentConfig(
+                    tools=[available_functions], system_instruction=system_prompt
+                ),
+            )
 
-    if not response.function_calls:
-        return response.text
+            for cand in (response.candidates or []):
+                if getattr(cand, "content", None):
+                    messages.append(cand.content)
+            
+            if verbose and getattr(response, "usage_metadata", None):
+                print("Prompt tokens:", response.usage_metadata.prompt_token_count)
+                print("Response tokens:", response.usage_metadata.candidates_token_count)
 
-    for function_call_part in response.function_calls:
-        tool_resp = call_function(function_call_part, verbose=verbose)
+            if getattr(response, "text", None):
+                print(response.text)
+                break
 
-        try:
-            payload = tool_resp.parts[0].function_response.response
-        except Exception as e:
-            raise RuntimeError("Tool call did not return function_response") from e
+            for function_call_part in response.function_calls:
+                tool_resp = call_function(function_call_part, verbose=verbose)
+                messages.append(tool_resp)
 
-        if verbose:
-            print(f"-> {payload}")
+                try:
+                    payload = tool_resp.parts[0].function_response.response
+                except Exception as e:
+                    raise RuntimeError("Tool call did not return function_response") from e
+
+                if verbose:
+                    print(f"-> {payload}")
+    except Exception as e:
+        print(e)
 
 
 if __name__ == "__main__":
